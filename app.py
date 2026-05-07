@@ -10,7 +10,7 @@ st.title("🔋 充电宝市场价格与容量分析面板")
 @st.cache_data(ttl=600)  # 缓存10分钟，避免频繁请求
 def load_data():
     # ⚠️ 请在这里替换为你真实的 Google Sheets CSV 发布链接
-    sheet_url = "https://docs.google.com/spreadsheets/d/1fkMRXkdKVdYFN3d_Y7bhFtA1BGIUlA3xAG86UvvhT1w/edit?gid=0#gid=0"
+    sheet_url = "sheet_url = "https://docs.google.com/spreadsheets/d/1fkMRXkdKVdYFN3d_Y7bhFtA1BGIUlA3xAG86UvvhT1w/export?format=csv&gid=0""
     
     # 读取数据
     df = pd.read_csv(sheet_url)

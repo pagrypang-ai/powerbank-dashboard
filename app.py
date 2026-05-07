@@ -1,133 +1,118 @@
 import streamlit as st
 import pandas as pd
-from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, HoverTool, Range1d
-import numpy as np
+import plotly.express as px
 
-# 页面配置
-st.set_page_config(page_title="产品动态对比看板", layout="wide")
+# 1. 页面基本设置 (设置为宽屏)
+st.set_page_config(page_title="Power Bank Dashboard", layout="wide")
+st.title("🔋 充电宝市场价格与容量分析面板")
 
-# Google Sheets CSV 导出链接
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1fkMRXkdKVdYFN3d_Y7bhFtA1BGIUlA3xAG86UvvhT1w/export?format=csv&gid=0"
-
-@st.cache_data
-def load_data(url):
-    df = pd.read_csv(url)
+# 2. 数据读取与缓存配置
+@st.cache_data(ttl=600)  # 缓存10分钟，避免频繁请求
+def load_data():
+    # ⚠️ 请在这里替换为你真实的 Google Sheets CSV 发布链接
+    sheet_url = "https://docs.google.com/spreadsheets/d/1fkMRXkdKVdYFN3d_Y7bhFtA1BGIUlA3xAG86UvvhT1w/edit?gid=0#gid=0"
     
-    # 1. 数据预处理 - Price 转换为浮点数
-    # 去除可能存在的货币符号和逗号
-    if df['Price'].dtype == 'object':
-        df['Price'] = df['Price'].replace(r'[$,]', '', regex=True).astype(float)
+    # 读取数据
+    df = pd.read_csv(sheet_url)
     
-    # 2. 数据预处理 - Capacity/mAh 转换为离散排序字符串
-    # 确保 X 轴按数值大小排列而非字母排列
-    df['Capacity_Val'] = pd.to_numeric(df['Capacity/mAh'], errors='coerce').fillna(0)
-    df = df.sort_values(by='Capacity_Val')
-    df['Capacity/mAh'] = df['Capacity/mAh'].astype(str)
+    # 清洗价格列：去掉 $ 符号或逗号，转换为数字，遇到无法转换的转为 NaN
+    if 'Price' in df.columns:
+        df['Price'] = pd.to_numeric(df['Price'].astype(str).str.replace('[\$,]', '', regex=True), errors='coerce')
     
+    # 清洗容量列：确保为字符串格式以便作为分类轴，或者转换为数值
+    if 'Capacity/mAh' in df.columns:
+        df['Capacity/mAh'] = df['Capacity/mAh'].astype(str)
+        
     return df
-
-# --- 侧边栏交互 ---
-st.sidebar.header("控制面板")
-
-# 刷新按钮
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
 
 # 加载数据
 try:
-    df_raw = load_data(SHEET_URL)
+    df = load_data()
 except Exception as e:
-    st.error(f"数据加载失败，请检查 Google Sheets 链接是否已发布为 CSV。错误: {e}")
+    st.error(f"数据读取失败，请检查链接是否正确。错误信息: {e}")
     st.stop()
 
-# 品牌筛选
-all_brands = df_raw['Brand'].unique().tolist()
-selected_brands = st.sidebar.multiselect("选择品牌", options=all_brands, default=all_brands)
+# 3. 侧边栏：刷新按钮与筛选器
+st.sidebar.header("⚙️ 控制面板")
 
-# 过滤数据
-df_filtered = df_raw[df_raw['Brand'].isin(selected_brands)].copy()
+# 刷新数据按钮
+if st.sidebar.button("🔄 刷新数据 (Refresh Data)"):
+    st.cache_data.clear()
+    st.rerun()
 
-# --- 主界面 ---
-st.title("🔋 产品对比看板 (Capacity vs Price)")
-st.markdown("基于实时 Google Sheets 数据构建。悬停在图片上查看详细参数。")
-
-if df_filtered.empty:
-    st.warning("请至少选择一个品牌。")
+# 品牌筛选器
+if 'Brand' in df.columns:
+    brands = df['Brand'].dropna().unique().tolist()
+    selected_brands = st.sidebar.multiselect("🏷️ 筛选品牌 (Filter Brands)", options=brands, default=brands)
+    filtered_df = df[df['Brand'].isin(selected_brands)]
 else:
-    # 准备 Bokeh 数据源
-    # 注意：image_url 需要指定图片的宽高（数据坐标系单位或像素）
-    source = ColumnDataSource(df_filtered)
+    st.error("数据中未找到 'Brand' 列，请检查表头拼写。")
+    st.stop()
 
-    # 获取 X 轴所有可能的分类（用于排序）
-    x_range = df_raw['Capacity/mAh'].unique().tolist()
+# 4. 构建 Plotly 散点图
+# 将所有需要悬停显示的列按顺序放进一个列表中
+hover_cols = [
+    'Brand', 'Model Number', 'URL of Image', 'Pickup or not', 'Sold by', 
+    'Rating', 'Number of Reviews', 'Was Price', 'Price', 'Capacity/mAh', 
+    'Pack', 'Size', 'Weight', 'Connect Type', 'Wireless', 'Fast charging', 
+    'USB power', 'Battery Indicator', 'Warranty', 'Note', 'Link'
+]
 
-    # 创建 Bokeh 图表
-    p = figure(
-        x_range=x_range,
-        height=600,
-        title="容量 vs 价格 散点图 (图片标记)",
-        x_axis_label="Capacity (mAh)",
-        y_axis_label="Price ($)",
-        tools="pan,wheel_zoom,box_zoom,reset,save",
-        active_scroll="wheel_zoom",
-        sizing_mode="stretch_width"
-    )
+# 检查列是否存在，防止报错
+missing_cols = [col for col in hover_cols if col not in filtered_df.columns]
+if missing_cols:
+    st.warning(f"数据表中缺失以下列，悬停框可能会显示不全: {', '.join(missing_cols)}")
+    # 将缺失的列补为空值，防止程序崩溃
+    for col in missing_cols:
+        filtered_df[col] = "N/A"
 
-    # 绘制图片散点
-    # anchor="center" 确保图片中心对齐坐标点
-    # w/h 为图片大小，在离散坐标轴下通常设置一个固定比例
-    img_glyphs = p.image_url(
-        url="URL of Image", 
-        x="Capacity/mAh", 
-        y="Price", 
-        source=source,
-        anchor="center",
-        w=0.4, # 相对宽度
-        h=15,  # 相对高度 (根据 Price 量级调整)
-        w_units="data",
-        h_units="screen" # 高度使用像素单位更易控制
-    )
+# 绘制散点图
+fig = px.scatter(
+    filtered_df,
+    x='Capacity/mAh',
+    y='Price',
+    color='Brand',
+    text='Brand',  # 【关键功能】在散点旁边显示品牌名
+    custom_data=hover_cols, # 将所有数据打包进图表，供悬停框调用
+    height=750
+)
 
-    # 构建立体 HTML 悬停提示
-    # 展示所有约 20 个字段
-    tooltips = f"""
-    <div style="padding: 10px; background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 5px; width: 300px; font-family: sans-serif;">
-        <div style="text-align: center; margin-bottom: 8px;">
-            <img src="@{{URL of Image}}" style="width: 100px; border-radius: 4px;">
-        </div>
-        <div style="font-size: 14px; font-weight: bold; color: #1f77b4; margin-bottom: 5px;">@{{Brand}} - @{{Model Number}}</div>
-        <hr>
-        <div style="font-size: 12px; line-height: 1.5;">
-            <b>💰 Price:</b> $@{{Price}} (Was: $@{{Was Price}})<br>
-            <b>⚡ Capacity:</b> @{{Capacity/mAh}} mAh<br>
-            <b>⭐ Rating:</b> @{{Rating}} (@{{Number of Reviews}} reviews)<br>
-            <b>📦 Sold by:</b> @{{Sold by}}<br>
-            <b>🚚 Pickup:</b> @{{Pickup or not}}<br>
-            <b>📐 Size/Weight:</b> @{{Size}} / @{{Weight}}<br>
-            <b>🔌 Connect:</b> @{{Connect Type}} (Wireless: @{{Wireless}})<br>
-            <b>🚀 Fast Charge:</b> @{{Fast charging}} | <b>🔋 Indicator:</b> @{{Battery Indicator}}<br>
-            <b>🛡️ Warranty:</b> @{{Warranty}}<br>
-            <b>📝 Note:</b> @{{Note}}<br>
-        </div>
-        <div style="margin-top: 10px; text-align: center;">
-            <a href="@{{Link}}" target="_blank" style="background-color: #4CAF50; color: white; padding: 5px 10px; text-decoration: none; border-radius: 3px; font-size: 11px;">View Product Link</a>
-        </div>
-    </div>
-    """
+# 5. 自定义图表样式与鼠标悬停弹窗 (Hover Tooltip)
+fig.update_traces(
+    textposition='top center', # 让品牌文字显示在圆点的正上方
+    marker=dict(size=14, opacity=0.8, line=dict(width=1, color='DarkSlateGrey')), # 放大散点
+    
+    # HTML 自定义悬停提示框
+    hovertemplate="""
+    <div style='text-align:center;'>
+        <img src='%{customdata[2]}' width='160' style='border-radius: 8px;'><br>
+        <b style='font-size:14px;'>%{customdata[0]} - %{customdata[1]}</b>
+    </div><br>
+    <table style='width:100%; font-size:12px;'>
+        <tr><td><b>💰 Price:</b></td><td>$ %{customdata[8]}</td></tr>
+        <tr><td><b>🔋 Capacity:</b></td><td>%{customdata[9]} mAh</td></tr>
+        <tr><td><b>🔌 Ports:</b></td><td>%{customdata[13]}</td></tr>
+        <tr><td><b>⚡ Fast Charge:</b></td><td>%{customdata[15]}</td></tr>
+        <tr><td><b>📶 Wireless:</b></td><td>%{customdata[14]}</td></tr>
+        <tr><td><b>⭐ Rating:</b></td><td>%{customdata[5]} (%{customdata[6]} reviews)</td></tr>
+        <tr><td><b>📦 Size:</b></td><td>%{customdata[11]}</td></tr>
+        <tr><td><b>⚖️ Weight:</b></td><td>%{customdata[12]}</td></tr>
+        <tr><td><b>🛒 Sold by:</b></td><td>%{customdata[4]}</td></tr>
+    </table>
+    <extra></extra> """
+)
 
-    hover = HoverTool(renderers=[img_glyphs], tooltips=tooltips)
-    p.add_tools(hover)
+# 优化坐标轴和背景显示
+fig.update_layout(
+    xaxis_title="电池容量 (Capacity / mAh)",
+    yaxis_title="价格 (Price / USD)",
+    hoverlabel=dict(bgcolor="white", font_size=13, font_family="Arial"),
+    plot_bgcolor='#f9f9f9' # 设定浅灰色背景，让散点更清晰
+)
 
-    # 美化图表
-    p.title.text_font_size = '16pt'
-    p.xaxis.major_label_orientation = 0.785 # 45度倾斜
-    p.background_fill_color = "#fafafa"
+# 6. 在 Streamlit 中渲染图表
+st.plotly_chart(fig, use_container_width=True)
 
-    # 在 Streamlit 中展示
-    st.bokeh_chart(p, use_container_width=True)
-
-    # 展示原始数据表（可选）
-    with st.expander("查看筛选后的原始数据"):
-        st.dataframe(df_filtered.drop(columns=['Capacity_Val']), use_container_width=True)
+# 底部数据预览表 (折叠面板)
+with st.expander("📊 查看底层原始数据"):
+    st.dataframe(filtered_df)
